@@ -1,0 +1,12 @@
+# Data files - confidential & too large for GitHub
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Mac system files
+.DS_Store
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
