@@ -1,0 +1,132 @@
+import os
+import pandas as pd
+
+os.chdir("/Users/Melody/Downloads/idx")
+
+sold = pd.read_csv("data/sold_with_rates.csv", low_memory=False)
+listings = pd.read_csv("data/listings_with_rates.csv", low_memory=False)
+
+print(f"Sold loaded:     {len(sold):,} rows, {sold.shape[1]} columns")
+print(f"Listings loaded: {len(listings):,} rows, {listings.shape[1]} columns")
+
+sold_count = len(sold)
+listings_count = len(listings)
+
+# Convert date fields to datetime
+date_fields = [
+    "CloseDate",
+    "PurchaseContractDate",
+    "ListingContractDate",
+    "ContractStatusChangeDate"
+]
+
+for col in date_fields:
+    if col in sold.columns:
+        sold[col] = pd.to_datetime(sold[col], errors="coerce")
+        print(f"Sold    — {col}: converted, {sold[col].isnull().sum():,} nulls")
+    if col in listings.columns:
+        listings[col] = pd.to_datetime(listings[col], errors="coerce")
+        print(f"Listings — {col}: converted, {listings[col].isnull().sum():,} nulls")
+
+# Ensure numeric fields are properly typed
+numeric_fields = [
+    "ClosePrice", "ListPrice", "OriginalListPrice",
+    "LivingArea", "LotSizeAcres", "BedroomsTotal",
+    "BathroomsTotalInteger", "DaysOnMarket", "YearBuilt"
+]
+
+for col in numeric_fields:
+    if col in sold.columns:
+        sold[col] = pd.to_numeric(sold[col], errors="coerce")
+        print(f"Sold — {col}: dtype={sold[col].dtype}, nulls={sold[col].isnull().sum():,}")
+
+# Flag invalid numeric values
+# ClosePrice <= 0
+sold["flag_invalid_close_price"] = sold["ClosePrice"] <= 0
+print(f"flag_invalid_close_price:      {sold['flag_invalid_close_price'].sum():,} records")
+
+# LivingArea <= 0
+sold["flag_invalid_living_area"] = sold["LivingArea"] <= 0
+print(f"flag_invalid_living_area:      {sold['flag_invalid_living_area'].sum():,} records")
+
+# DaysOnMarket < 0
+sold["flag_negative_dom"] = sold["DaysOnMarket"] < 0
+print(f"flag_negative_dom:             {sold['flag_negative_dom'].sum():,} records")
+
+# Negative bedrooms or bathrooms
+sold["flag_invalid_beds_baths"] = (
+    (sold["BedroomsTotal"] < 0) | (sold["BathroomsTotalInteger"] < 0)
+)
+print(f"flag_invalid_beds_baths:       {sold['flag_invalid_beds_baths'].sum():,} records")
+
+# Date consistency checks
+# ListingContractDate should come BEFORE CloseDate
+sold["listing_after_close_flag"] = (
+    sold["ListingContractDate"] > sold["CloseDate"]
+)
+print(f"listing_after_close_flag:      {sold['listing_after_close_flag'].sum():,} records")
+
+# PurchaseContractDate should come BEFORE CloseDate
+sold["purchase_after_close_flag"] = (
+    sold["PurchaseContractDate"] > sold["CloseDate"]
+)
+print(f"purchase_after_close_flag:     {sold['purchase_after_close_flag'].sum():,} records")
+
+# ListingContractDate should come BEFORE PurchaseContractDate
+sold["negative_timeline_flag"] = (
+    sold["ListingContractDate"] > sold["PurchaseContractDate"]
+)
+print(f"negative_timeline_flag:        {sold['negative_timeline_flag'].sum():,} records")
+
+
+# Geographic data checks
+# Missing coordinates
+sold["flag_missing_coords"] = (
+    sold["Latitude"].isnull() | sold["Longitude"].isnull()
+)
+print(f"flag_missing_coords:           {sold['flag_missing_coords'].sum():,} records")
+
+# Sentinel null values (0,0)
+sold["flag_zero_coords"] = (
+    (sold["Latitude"] == 0) | (sold["Longitude"] == 0)
+)
+print(f"flag_zero_coords:              {sold['flag_zero_coords'].sum():,} records")
+
+# Longitude > 0 (California should be negative longitude)
+sold["flag_positive_longitude"] = sold["Longitude"] > 0
+print(f"flag_positive_longitude:       {sold['flag_positive_longitude'].sum():,} records")
+
+# Out-of-state coordinates (California approx bounds)
+# Lat: 32.5 to 42.0, Lon: -124.5 to -114.0
+sold["flag_out_of_state"] = (
+    sold["Latitude"].notna() & sold["Longitude"].notna() &
+    (
+        (sold["Latitude"] < 32.5) | (sold["Latitude"] > 42.0) |
+        (sold["Longitude"] < -124.5) | (sold["Longitude"] > -114.0)
+    )
+)
+print(f"flag_out_of_state:             {sold['flag_out_of_state'].sum():,} records")
+
+# Summary before/after
+
+# All flag columns
+flag_cols = [col for col in sold.columns if col.startswith("flag_") or col.endswith("_flag")]
+
+print(f"\nOriginal row count: {sold_original_count:,}")
+print(f"Current row count:  {len(sold):,}  (no rows deleted — flags only)")
+print(f"\nFlag columns created: {len(flag_cols)}")
+
+total_flagged = sold[flag_cols].any(axis=1).sum()
+print(f"Total records with at least one flag: {total_flagged:,} ({total_flagged/len(sold)*100:.1f}%)")
+
+print("\n-- Flag Summary --")
+for col in flag_cols:
+    count = sold[col].sum()
+    print(f"  {col}: {count:,} ({count/len(sold)*100:.2f}%)")
+
+
+sold.to_csv("data/sold_cleaned.csv", index=False)
+listings.to_csv("data/listings_cleaned.csv", index=False)
+
+print(f"Saved sold_cleaned.csv:     {len(sold):,} rows, {sold.shape[1]} columns")
+print(f"Saved listings_cleaned.csv: {len(listings):,} rows, {listings.shape[1]} columns")
