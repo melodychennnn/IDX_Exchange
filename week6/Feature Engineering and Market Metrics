@@ -1,0 +1,168 @@
+import os
+import pandas as pd
+import numpy as np
+
+os.chdir("/Users/Melody/Downloads/idx")
+
+
+sold = pd.read_csv("data/sold_cleaned.csv", low_memory=False)
+print(f"Loaded: {len(sold):,} rows, {sold.shape[1]} columns")
+
+# Ensure date fields are datetime
+sold["CloseDate"] = pd.to_datetime(sold["CloseDate"], errors="coerce")
+sold["ListingContractDate"] = pd.to_datetime(sold["ListingContractDate"], errors="coerce")
+sold["PurchaseContractDate"] = pd.to_datetime(sold["PurchaseContractDate"], errors="coerce")
+
+
+# Create Key Metrics
+# Price Ratio
+sold["price_ratio"] = (sold["ClosePrice"] / sold["OriginalListPrice"]).round(4)
+print(f"price_ratio:                 {sold['price_ratio'].notna().sum():,} records populated")
+
+# Price Per Square Foot
+sold["price_per_sqft"] = (sold["ClosePrice"] / sold["LivingArea"]).round(2)
+print(f"price_per_sqft:              {sold['price_per_sqft'].notna().sum():,} records populated")
+
+# Close to List Price Ratio
+sold["close_to_list_ratio"] = (sold["ClosePrice"] / sold["ListPrice"]).round(4)
+print(f"close_to_list_ratio:         {sold['close_to_list_ratio'].notna().sum():,} records populated")
+
+# Close to Original List Price Ratio
+sold["close_to_original_list_ratio"] = (sold["ClosePrice"] / sold["OriginalListPrice"]).round(4)
+print(f"close_to_original_list_ratio:{sold['close_to_original_list_ratio'].notna().sum():,} records populated")
+
+
+# Time Series Variables
+# Year, Month, YrMo derived from CloseDate
+sold["close_year"]  = sold["CloseDate"].dt.year
+sold["close_month"] = sold["CloseDate"].dt.month
+sold["close_yrmo"]  = sold["CloseDate"].dt.to_period("M").astype(str)
+
+print(f"close_year range:  {sold['close_year'].min()} – {sold['close_year'].max()}")
+print(f"close_month range: {sold['close_month'].min()} – {sold['close_month'].max()}")
+print(f"close_yrmo sample: {sold['close_yrmo'].dropna().iloc[0]}")
+
+
+# Timeline Duration Metrics
+# Listing to Contract Days
+sold["listing_to_contract_days"] = (
+    sold["PurchaseContractDate"] - sold["ListingContractDate"]
+).dt.days
+print(f"listing_to_contract_days:    {sold['listing_to_contract_days'].notna().sum():,} records populated")
+print(f"  Median: {sold['listing_to_contract_days'].median():.0f} days")
+
+# Contract to Close Days
+sold["contract_to_close_days"] = (
+    sold["CloseDate"] - sold["PurchaseContractDate"]
+).dt.days
+print(f"contract_to_close_days:      {sold['contract_to_close_days'].notna().sum():,} records populated")
+print(f"  Median: {sold['contract_to_close_days'].median():.0f} days")
+
+
+# Sample Output Table
+demo_cols = [
+    # Required metrics from handbook
+    "CloseDate",
+    "close_yrmo",         
+    "ClosePrice",
+    "price_ratio",        
+    "close_to_original_list_ratio", 
+    "price_per_sqft",      
+    "DaysOnMarket",           
+    "listing_to_contract_days", 
+    "contract_to_close_days",
+]
+
+existing_demo_cols = [c for c in demo_cols if c in sold.columns]
+print(sold[existing_demo_cols].dropna(subset=["price_ratio"]).head(5).to_string(index=False))
+
+# Confirm all metrics exist
+print("\n-- Metric Confirmation --")
+metrics = {
+    "price_ratio":                   "ClosePrice / OriginalListPrice",
+    "close_to_original_list_ratio":  "ClosePrice / OriginalListPrice (full history)",
+    "price_per_sqft":                "ClosePrice / LivingArea",
+    "DaysOnMarket":                  "Raw MLS field",
+    "close_yrmo":                    "Derived from CloseDate (YYYY-MM)",
+    "close_year":                    "Derived from CloseDate",
+    "close_month":                   "Derived from CloseDate",
+    "listing_to_contract_days":      "PurchaseContractDate - ListingContractDate",
+    "contract_to_close_days":        "CloseDate - PurchaseContractDate",
+}
+
+for metric, formula in metrics.items():
+    exists = "✓" if metric in sold.columns else "✗ MISSING"
+    print(f"  {exists}  {metric:35s} → {formula}")
+
+
+# Segment Analysis
+# By PropertyType and PropertySubType
+print("\n-- Median Metrics by PropertySubType --")
+subtype_summary = (
+    sold.groupby("PropertySubType")
+    .agg(
+        count=("ClosePrice", "count"),
+        median_close_price=("ClosePrice", "median"),
+        median_ppsf=("price_per_sqft", "median"),
+        median_dom=("DaysOnMarket", "median"),
+        median_close_to_list=("close_to_list_ratio", "median")
+    )
+    .sort_values("count", ascending=False)
+    .reset_index()
+)
+subtype_summary["median_close_price"] = subtype_summary["median_close_price"].apply(lambda x: f"${x:,.0f}")
+subtype_summary["median_ppsf"] = subtype_summary["median_ppsf"].apply(lambda x: f"${x:,.0f}")
+print(subtype_summary.to_string(index=False))
+
+# By CountyOrParish
+print("\n-- Median Metrics by County --")
+county_summary = (
+    sold.groupby("CountyOrParish")
+    .agg(
+        count=("ClosePrice", "count"),
+        median_close_price=("ClosePrice", "median"),
+        median_ppsf=("price_per_sqft", "median"),
+        median_dom=("DaysOnMarket", "median"),
+        median_close_to_list=("close_to_list_ratio", "median")
+    )
+    .sort_values("median_close_price", ascending=False)
+    .reset_index()
+)
+county_summary["median_close_price"] = county_summary["median_close_price"].apply(lambda x: f"${x:,.0f}")
+county_summary["median_ppsf"] = county_summary["median_ppsf"].apply(lambda x: f"${x:,.0f}")
+print(county_summary.to_string(index=False))
+
+# By ListOfficeName (top 20 for competitive intelligence)
+print("\n-- Top 20 Listing Offices by Sales Volume --")
+office_summary = (
+    sold.groupby("ListOfficeName")
+    .agg(
+        units=("ClosePrice", "count"),
+        total_volume=("ClosePrice", "sum"),
+        median_price=("ClosePrice", "median")
+    )
+    .sort_values("total_volume", ascending=False)
+    .head(20)
+    .reset_index()
+)
+office_summary["total_volume"] = office_summary["total_volume"].apply(lambda x: f"${x:,.0f}")
+office_summary["median_price"] = office_summary["median_price"].apply(lambda x: f"${x:,.0f}")
+print(office_summary.to_string(index=False))
+
+
+# Save in CSV File
+sold.to_csv("data/sold_features.csv", index=False)
+print(f"Saved sold_features.csv: {len(sold):,} rows, {sold.shape[1]} columns")
+
+# List all new columns added
+new_feature_cols = [
+    "price_per_sqft", "close_to_list_ratio", "close_to_original_list_ratio",
+    "close_year", "close_month", "close_yrmo",
+    "listing_to_contract_days", "contract_to_close_days"
+]
+print(f"\nNew columns added this week: {len(new_feature_cols)}")
+for col in new_feature_cols:
+    print(f"  + {col}")
+
+
+
