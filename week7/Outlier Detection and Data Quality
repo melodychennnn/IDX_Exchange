@@ -1,0 +1,115 @@
+import os
+import pandas as pd
+import numpy as np
+
+os.chdir("/Users/Melody/Downloads/idx")
+
+sold = pd.read_csv("data/sold_features.csv", low_memory=False)
+print(f"Loaded: {len(sold):,} rows, {sold.shape[1]} columns")
+
+# Business Rule Flags (always invalid, regardless of IQR)
+sold["outlier_invalid_close_price"] = sold["ClosePrice"] <= 0
+sold["outlier_invalid_living_area"] = sold["LivingArea"] <= 0
+sold["outlier_invalid_dom"]         = sold["DaysOnMarket"] < 0
+
+print(f"ClosePrice <= 0:    {sold['outlier_invalid_close_price'].sum():,} records")
+print(f"LivingArea <= 0:    {sold['outlier_invalid_living_area'].sum():,} records")
+print(f"DaysOnMarket < 0:   {sold['outlier_invalid_dom'].sum():,} records")
+
+
+# IQR Outlier Detection
+def iqr_flag(df, col):
+
+    q1 = df[col].quantile(0.25)
+    q3 = df[col].quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+
+    flag = (df[col] < lower) | (df[col] > upper)
+
+    print(f"\n  {col}:")
+    print(f"    Q1={q1:,.2f}  Q3={q3:,.2f}  IQR={iqr:,.2f}")
+    print(f"    Lower bound: {lower:,.2f}")
+    print(f"    Upper bound: {upper:,.2f}")
+    print(f"    Outliers flagged: {flag.sum():,} ({flag.sum()/len(df)*100:.2f}%)")
+
+    return flag, lower, upper
+
+
+# Apply IQR to key numeric fields
+sold["outlier_iqr_close_price"], cp_lower, cp_upper = iqr_flag(sold, "ClosePrice")
+sold["outlier_iqr_living_area"], la_lower, la_upper = iqr_flag(sold, "LivingArea")
+sold["outlier_iqr_dom"],         dom_lower, dom_upper = iqr_flag(sold, "DaysOnMarket")
+sold["outlier_iqr_ppsf"],        ppsf_lower, ppsf_upper = iqr_flag(sold, "price_per_sqft")
+
+
+# Combined Outlier Flag
+# Any record with at least one outlier flag
+outlier_cols = [
+    "outlier_invalid_close_price",
+    "outlier_invalid_living_area",
+    "outlier_invalid_dom",
+    "outlier_iqr_close_price",
+    "outlier_iqr_living_area",
+    "outlier_iqr_dom",
+    "outlier_iqr_ppsf"
+]
+
+sold["outlier_any_flag"] = sold[outlier_cols].any(axis=1)
+print(f"Total records flagged (any outlier): {sold['outlier_any_flag'].sum():,} ({sold['outlier_any_flag'].sum()/len(sold)*100:.2f}%)")
+
+# Before / After Comparison
+# Clean filtered dataset (remove outliers)
+sold_filtered = sold[sold["outlier_any_flag"] == False].copy()
+
+metrics = ["ClosePrice", "LivingArea", "DaysOnMarket", "price_per_sqft"]
+
+print(f"\n{'Metric':<25} {'Before Median':>15} {'After Median':>15} {'Records Removed':>18}")
+print("-" * 75)
+
+for col in metrics:
+    before_median = sold[col].median()
+    after_median  = sold_filtered[col].median()
+    removed = len(sold) - len(sold_filtered)
+    print(f"{col:<25} ${before_median:>13,.0f} ${after_median:>13,.0f} {removed:>18,}")
+
+print(f"\nBefore: {len(sold):,} records")
+print(f"After:  {len(sold_filtered):,} records")
+print(f"Removed: {len(sold) - len(sold_filtered):,} records ({(len(sold)-len(sold_filtered))/len(sold)*100:.2f}%)")
+
+
+# Percentile Summary for Key Fields
+print("\n-- ClosePrice Percentiles (Before vs After) --")
+percentiles = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+cp_before = sold["ClosePrice"].quantile(percentiles)
+cp_after  = sold_filtered["ClosePrice"].quantile(percentiles)
+pct_df = pd.DataFrame({
+    "Percentile": [f"{int(p*100)}th" for p in percentiles],
+    "Before": cp_before.values,
+    "After":  cp_after.values
+})
+pct_df["Before"] = pct_df["Before"].apply(lambda x: f"${x:,.0f}")
+pct_df["After"]  = pct_df["After"].apply(lambda x: f"${x:,.0f}")
+print(pct_df.to_string(index=False))
+
+
+# Save Both Datasets
+# Full dataset with all outlier flags preserved
+sold.to_csv("data/sold_flagged.csv", index=False)
+print(f"Saved sold_flagged.csv:   {len(sold):,} rows, {sold.shape[1]} columns")
+
+# Clean filtered dataset for Tableau dashboards
+sold_filtered.to_csv("data/sold_filtered.csv", index=False)
+print(f"Saved sold_filtered.csv:  {len(sold_filtered):,} rows, {sold_filtered.shape[1]} columns")
+
+print("""
+OUTPUTS EXPLAINED:
+- sold_flagged.csv  → Full dataset, all records preserved, outlier flags added
+                      Use this for auditing and transparency
+- sold_filtered.csv → Clean dataset, outliers removed
+                      Use this for Tableau dashboards in Weeks 8-10
+""")
+
+
+
